@@ -16,7 +16,7 @@ env:
   ghQtBuilds_hash_x86: bf4124046cc50ccbbeb3f786c041e884fd4205cd6e616070a75c850105cbf1db
   ghQtBuilds_hash_x64: 30290d82a02bfaa24c1bf37bcb9c074aba18a673a7176628fccdf71197cee898
   verify_file_url: https://raw.githubusercontent.com/cokefis/BarryChristmas/master/verify.c
-  release_version_tag: v1.14.5
+  release_version_tag: v1.14.7
 
 jobs:
   Build_x64:
