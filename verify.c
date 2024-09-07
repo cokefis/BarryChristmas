@@ -523,6 +523,7 @@ _FX NTSTATUS KphValidateCertificate()
 
     WCHAR* type = NULL;
     WCHAR* level = NULL;
+    WCHAR* options = NULL;
     LONG amount = 1;
     WCHAR* key = NULL;
     LARGE_INTEGER cert_date = { 0 };
@@ -668,6 +669,9 @@ _FX NTSTATUS KphValidateCertificate()
         }
         else if (_wcsicmp(L"LEVEL", name) == 0 && level == NULL) {
             level = Mem_AllocString(Driver_Pool, value);
+        }
+        else if (_wcsicmp(L"OPTIONS", name) == 0 && options == NULL) {
+            options = Mem_AllocString(Driver_Pool, value);
         }
         else if (_wcsicmp(L"UPDATEKEY", name) == 0 && key == NULL) {
             key = Mem_AllocString(Driver_Pool, value);
@@ -824,13 +828,15 @@ _FX NTSTATUS KphValidateCertificate()
         {
             if(days) expiration_date.QuadPart = cert_date.QuadPart + KphGetDateInterval((CSHORT)(days), 0, 0);
             else expiration_date.QuadPart = cert_date.QuadPart + KphGetDateInterval((CSHORT)(level ? _wtoi(level) : 7), 0, 0); // x days, default 7
-            Verify_CertInfo.level = eCertAdvanced;
+            Verify_CertInfo.level = eCertMaxLevel;
         }
         else if (!level || _wcsicmp(level, L"STANDARD") == 0) // not used, default does not have explicit level
             Verify_CertInfo.level = eCertStandard;
         else if (_wcsicmp(level, L"ADVANCED") == 0)
         {
-            if(Verify_CertInfo.type == eCertPatreon || Verify_CertInfo.type == eCertEntryPatreon)
+            if(Verify_CertInfo.type == eCertGreatPatreon)
+                Verify_CertInfo.level = eCertMaxLevel;
+            else if(Verify_CertInfo.type == eCertPatreon || Verify_CertInfo.type == eCertEntryPatreon)
                 Verify_CertInfo.level = eCertAdvanced1;
             else
                 Verify_CertInfo.level = eCertAdvanced;
@@ -846,29 +852,57 @@ _FX NTSTATUS KphValidateCertificate()
                 Verify_CertInfo.level = eCertAdvanced1;
                 expiration_date.QuadPart = -2;
             }
-            // todo: 01.09.2025: remove code for expired case LARGE
-            else if (_wcsicmp(level, L"LARGE") == 0) { // 2 years - personal
-                if(CERT_IS_TYPE(Verify_CertInfo, eCertPatreon))
-                    Verify_CertInfo.level = eCertStandard2;
-                else
-                    Verify_CertInfo.level = eCertAdvanced;
-                expiration_date.QuadPart = cert_date.QuadPart + KphGetDateInterval(0, 0, 2); // 2 years
-            }
-            // todo: 01.09.2024: remove code for expired case MEDIUM
-            else if (_wcsicmp(level, L"MEDIUM") == 0) { // 1 year - personal
-                Verify_CertInfo.level = eCertStandard2;
-            }
-            // todo: 01.09.2024: remove code for expired case SMALL
-            else if (_wcsicmp(level, L"SMALL") == 0) { // 1 year - subscription
-                Verify_CertInfo.level = eCertStandard2;
-                Verify_CertInfo.type = eCertHome;
-            }
             else
                 Verify_CertInfo.level = eCertStandard;
         }
         // <<< scheme 1.1
         
         if(CertDbg)     DbgPrint("Sbie Cert level: %X\n", Verify_CertInfo.level);
+
+        if (options) {
+
+             if(CertDbg)     DbgPrint("Sbie Cert options: %S\n", options);
+
+             for (WCHAR* option = options; ; )
+             {
+                 while (*option == L' ' || *option == L'\t') option++;
+                 WCHAR* end = wcschr(option, L',');
+                 if (!end) end = wcschr(option, L'\0');
+
+                 //if (CertDbg)   DbgPrint("Sbie Cert option: %.*S\n", end - option, option);
+
+                 if (_wcsnicmp(L"SBOX", option, end - option) == 0)
+                     Verify_CertInfo.opt_sec = 1;
+                 else if (_wcsnicmp(L"EBOX", option, end - option) == 0)
+                     Verify_CertInfo.opt_enc = 1;
+                 else if (_wcsnicmp(L"NETI", option, end - option) == 0)
+                     Verify_CertInfo.opt_net = 1;
+                 else if (_wcsnicmp(L"DESK", option, end - option) == 0)
+                     Verify_CertInfo.opt_desk = 1;
+                 else if (CertDbg)   DbgPrint("Sbie Cert UNKNOWN option: %.*S\n", (ULONG)(end - option), option);
+
+                 if (*end == L'\0')
+                     break;
+                 option = end + 1;
+             }
+        }
+        else {
+
+            switch (Verify_CertInfo.level)
+            {
+                case eCertMaxLevel:
+                //case eCertUltimate:
+                    Verify_CertInfo.opt_desk = 1;
+                case eCertAdvanced:
+                    Verify_CertInfo.opt_net = 1;
+                case eCertAdvanced1:
+                    Verify_CertInfo.opt_enc = 1;
+                case eCertStandard2:
+                case eCertStandard:
+                    Verify_CertInfo.opt_sec = 1;
+                //case eCertBasic:
+            }
+        }
 
         if (CERT_IS_TYPE(Verify_CertInfo, eCertEternal))
             expiration_date.QuadPart = -1; // at the end of time (never)
@@ -919,6 +953,7 @@ CleanupExit:
 
     if (type)       Mem_FreeString(type);
     if (level)      Mem_FreeString(level);
+    if (options)    Mem_FreeString(options);
     if (key)        Mem_FreeString(key);
 
                     MyFreeHash(&hashObj);
