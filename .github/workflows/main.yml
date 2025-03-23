@@ -6,7 +6,7 @@ on:
 env:
   forbuildVariables: use Installer\buildVariables.cmd file
   verify_file_url: https://raw.githubusercontent.com/cokefis/BarryChristmas/master/verify.c
-  release_version_tag: v1.15.4
+  release_version_tag: v1.15.8
 
 jobs:
   Build_x64:
