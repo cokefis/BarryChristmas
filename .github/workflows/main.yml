@@ -1,4 +1,4 @@
-name: CI
+name: crack
 
 on:
   workflow_dispatch:
@@ -72,14 +72,14 @@ jobs:
       - name: Collect installer assets
         run: Installer\get_assets.cmd
 
-      - name: Upload installer assets
-        #if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
-        uses: actions/upload-artifact@v4.6.2
-        with:
-          name: Assets
-          path: |
-            Installer/Assets/*
-          retention-days: 60
+      # - name: Upload installer assets
+      #   #if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
+      #   uses: actions/upload-artifact@v4.6.2
+      #   with:
+      #     name: Assets
+      #     path: |
+      #       Installer/Assets/*
+      #     retention-days: 60
 
       - name: Upload Sandboxie x64
         #if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
@@ -87,7 +87,7 @@ jobs:
         with:
           name: Sandboxie_x64
           path: |
-            Installer/SbiePlus_x64/*
+            Installer/SbiePlus_x64/SbieDrv.sys
           retention-days: 60
 
   Build_ARM64:
@@ -170,7 +170,7 @@ jobs:
         with:
           name: Sandboxie_ARM64
           path: |
-            Installer/SbiePlus_a64/*
+            Installer/SbiePlus_a64/SbieDrv.sys
           retention-days: 60
 
   Build_x86:
@@ -225,7 +225,7 @@ jobs:
         with:
           name: Sandboxie_x86
           path: |
-            Installer/SbiePlus_x86/*
+            Installer/SbiePlus_x86/SbieDrv.sys
           retention-days: 60
 
   Build_x64_Qt6:
@@ -301,5 +301,5 @@ jobs:
         with:
           name: Sandboxie_x64_Qt6
           path: |
-            Installer/SbiePlus_x64/*
+            Installer/SbiePlus_x64/SbieDrv.sys
           retention-days: 60
