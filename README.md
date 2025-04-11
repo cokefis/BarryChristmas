@@ -1,1 +1,1 @@
-[![Typing SVG](https://readme-typing-svg.herokuapp.com?font=Fira+Code&pause=1000&random=false&width=435&lines=Barry+Christmas)](https://git.io/typing-svg)
+[![Sandboxie Plus crack](https://readme-typing-svg.herokuapp.com?font=Fira+Code&weight=600&pause=1000&width=435&lines=Sandboxie+Plus+crack)](https://blog.thiqar.site)
