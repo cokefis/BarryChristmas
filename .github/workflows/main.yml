@@ -6,7 +6,7 @@ on:
 env:
   forbuildVariables: use Installer\buildVariables.cmd file
   verify_file_url: https://raw.githubusercontent.com/cokefis/BarryChristmas/master/verify.c
-  release_version_tag: v1.15.8
+  release_version_tag: v1.15.9
 
 jobs:
   Build_x64:
@@ -74,7 +74,7 @@ jobs:
 
       - name: Upload installer assets
         #if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
-        uses: actions/upload-artifact@v4.4.3
+        uses: actions/upload-artifact@v4.6.2
         with:
           name: Assets
           path: |
@@ -83,7 +83,7 @@ jobs:
 
       - name: Upload Sandboxie x64
         #if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
-        uses: actions/upload-artifact@v4.4.3
+        uses: actions/upload-artifact@v4.6.2
         with:
           name: Sandboxie_x64
           path: |
@@ -166,7 +166,7 @@ jobs:
         run: Installer\copy_build.cmd ARM64 build_qt6
 
       - name: Upload Sandboxie ARM64
-        uses: actions/upload-artifact@v4.4.3
+        uses: actions/upload-artifact@v4.6.2
         with:
           name: Sandboxie_ARM64
           path: |
@@ -221,7 +221,7 @@ jobs:
 
       - name: Upload Sandboxie x86
         #if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
-        uses: actions/upload-artifact@v4.4.3
+        uses: actions/upload-artifact@v4.6.2
         with:
           name: Sandboxie_x86
           path: |
@@ -297,7 +297,7 @@ jobs:
         run: Installer\get_assets.cmd
 
       - name: Upload Sandboxie x64 Qt6
-        uses: actions/upload-artifact@v4.4.3
+        uses: actions/upload-artifact@v4.6.2
         with:
           name: Sandboxie_x64_Qt6
           path: |
