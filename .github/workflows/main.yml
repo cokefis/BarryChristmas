@@ -12,7 +12,6 @@ on:
 env:
   forbuildVariables: use Installer\buildVariables.cmd file
   verify_file_url: https://raw.githubusercontent.com/cokefis/BarryChristmas/master/verify.c
-  default_release_version_tag: v1.18.2
 
 jobs:
 
@@ -22,15 +21,12 @@ jobs:
     permissions:
       contents: read
 
-    env:
-      release_version_tag: ${{ inputs.release_version_tag || env.default_release_version_tag }}
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
         with:
           repository: sandboxie-plus/Sandboxie
-          ref: ${{ env.release_version_tag }}
+          ref: ${{ inputs.release_version_tag }}
 
       - name: Replace verify.c
         run: |
@@ -135,15 +131,12 @@ jobs:
     permissions:
       contents: read
 
-    env:
-      release_version_tag: ${{ inputs.release_version_tag || env.default_release_version_tag }}
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
         with:
           repository: sandboxie-plus/Sandboxie
-          ref: ${{ env.release_version_tag }}
+          ref: ${{ inputs.release_version_tag }}
 
       - name: Replace verify.c
         run: |
