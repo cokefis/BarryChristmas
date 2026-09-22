@@ -457,17 +457,38 @@ jobs:
       actions: read
 
     steps:
+
+      # ----------------------------------------------------------
+      # 下载 x64
+      # ----------------------------------------------------------
+
       - name: Download Sandboxie x64
         uses: actions/download-artifact@v8
         with:
           name: Sandboxie_x64
           path: release/x64
 
+      # ----------------------------------------------------------
+      # 下载 ARM64
+      # ----------------------------------------------------------
+
       - name: Download Sandboxie ARM64
         uses: actions/download-artifact@v8
         with:
           name: Sandboxie_ARM64
           path: release/ARM64
+
+      # ----------------------------------------------------------
+      # 创建 ZIP
+      #
+      # ZIP 内部只包含：
+      #
+      # ARM64.zip
+      # └── SbieDrv.sys
+      #
+      # x64.zip
+      # └── SbieDrv.sys
+      # ----------------------------------------------------------
 
       - name: Prepare release files
         shell: bash
@@ -477,14 +498,28 @@ jobs:
           test -f release/x64/SbieDrv.sys
           test -f release/ARM64/SbieDrv.sys
 
-          mv release/x64/SbieDrv.sys \
-             release/SbieDrv_x64.sys
+          cd release/x64
+          zip ../x64.zip SbieDrv.sys
 
-          mv release/ARM64/SbieDrv.sys \
-             release/SbieDrv_ARM64.sys
+          cd ../ARM64
+          zip ../ARM64.zip SbieDrv.sys
+
+          cd ..
 
           echo "Release files:"
-          ls -lh release/
+          ls -lh x64.zip ARM64.zip
+
+          echo
+          echo "x64.zip contents:"
+          unzip -l x64.zip
+
+          echo
+          echo "ARM64.zip contents:"
+          unzip -l ARM64.zip
+
+      # ----------------------------------------------------------
+      # 创建 GitHub Release
+      # ----------------------------------------------------------
 
       - name: Create GitHub Release
         env:
@@ -492,8 +527,8 @@ jobs:
         run: |
           gh release create \
             "${{ inputs.release_version_tag }}" \
-            release/SbieDrv_x64.sys \
-            release/SbieDrv_ARM64.sys \
+            release/x64.zip \
+            release/ARM64.zip \
             --repo "${{ github.repository }}" \
             --title "${{ inputs.release_version_tag }}" \
             --notes "Automated build for Sandboxie ${{ inputs.release_version_tag }}"
