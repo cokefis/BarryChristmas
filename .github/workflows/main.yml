@@ -457,30 +457,17 @@ jobs:
       actions: read
 
     steps:
-
-      # ----------------------------------------------------------
-      # 下载 x64
-      # ----------------------------------------------------------
-
       - name: Download Sandboxie x64
         uses: actions/download-artifact@v8
         with:
           name: Sandboxie_x64
           path: release/x64
 
-      # ----------------------------------------------------------
-      # 下载 ARM64
-      # ----------------------------------------------------------
-
       - name: Download Sandboxie ARM64
         uses: actions/download-artifact@v8
         with:
           name: Sandboxie_ARM64
           path: release/ARM64
-
-      # ----------------------------------------------------------
-      # 检查并重命名
-      # ----------------------------------------------------------
 
       - name: Prepare release files
         shell: bash
@@ -499,10 +486,6 @@ jobs:
           echo "Release files:"
           ls -lh release/
 
-      # ----------------------------------------------------------
-      # 创建 Release
-      # ----------------------------------------------------------
-
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -511,5 +494,6 @@ jobs:
             "${{ inputs.release_version_tag }}" \
             release/SbieDrv_x64.sys \
             release/SbieDrv_ARM64.sys \
+            --repo "${{ github.repository }}" \
             --title "${{ inputs.release_version_tag }}" \
             --notes "Automated build for Sandboxie ${{ inputs.release_version_tag }}"
