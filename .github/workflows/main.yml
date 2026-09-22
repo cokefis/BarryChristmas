@@ -15,12 +15,15 @@ on:
         default: 'https://raw.githubusercontent.com/cokefis/BarryChristmas/master/verify.c'
         type: string
 
+
 env:
   forbuildVariables: use Installer\buildVariables.cmd file
+
   DEFAULT_VERIFY_FILE_URL: 'https://raw.githubusercontent.com/cokefis/BarryChristmas/master/verify.c'
 
 
-# 防止同一个分支同时运行多个构建，尤其是避免 verify.c git push 冲突
+# 防止同一个分支同时运行两个 workflow，
+# 避免两个 workflow 同时修改 verify.c / 创建 Release
 concurrency:
   group: crack-${{ github.repository }}-${{ github.ref }}
   cancel-in-progress: false
@@ -32,18 +35,20 @@ jobs:
   # Update verify.c
   #
   # 作用：
-  # 1. Checkout 当前项目，而不是 Sandboxie 仓库
-  # 2. 如果 verify_file_url != 默认 URL，则下载新的 verify.c
+  # 1. Checkout 当前项目仓库
+  # 2. 当输入 URL != 默认 URL 时下载新的 verify.c
   # 3. 提交到当前项目仓库根目录
-  # 4. 把最终使用的 verify.c 上传为 artifact
+  # 4. 上传最终 verify.c，供 x64 / ARM64 使用
   # ============================================================
 
   Update_verify:
     name: Update verify.c
+
     runs-on: ubuntu-latest
 
     permissions:
       contents: write
+      actions: write
 
     outputs:
       commit_sha: ${{ steps.commit_info.outputs.commit_sha }}
@@ -60,16 +65,15 @@ jobs:
           fetch-depth: 1
 
       # ----------------------------------------------------------
-      # 检查 workflow 是否从 branch 运行
-      #
-      # 因为后面需要 git push。
-      # workflow_dispatch 从 branch 运行时 github.ref_type = branch。
+      # 如果需要修改 verify.c，则要求 workflow 从 branch 运行
       # ----------------------------------------------------------
 
       - name: Check ref type
         if: ${{ inputs.verify_file_url != env.DEFAULT_VERIFY_FILE_URL }}
         shell: bash
         run: |
+          set -e
+
           if [ "${GITHUB_REF_TYPE}" != "branch" ]; then
             echo "ERROR: verify_file_url 与默认值不同，需要提交 verify.c。"
             echo "但是当前 workflow 不是从 branch 运行。"
@@ -78,21 +82,27 @@ jobs:
           fi
 
       # ----------------------------------------------------------
-      # 确保默认 verify.c 存在
+      # 默认 URL：
+      # 直接使用项目现有 verify.c
       # ----------------------------------------------------------
 
       - name: Check existing verify.c
         if: ${{ inputs.verify_file_url == env.DEFAULT_VERIFY_FILE_URL }}
         shell: bash
         run: |
+          set -e
+
           if [ ! -f "./verify.c" ]; then
             echo "ERROR: 当前项目根目录不存在 verify.c。"
             exit 1
           fi
 
+          echo "Using existing verify.c:"
+          ls -lh ./verify.c
+
       # ----------------------------------------------------------
-      # 当输入 URL 与默认 URL 不同时：
-      # 下载新的 verify.c
+      # 自定义 URL：
+      # 下载 verify.c
       # ----------------------------------------------------------
 
       - name: Download verify.c
@@ -105,6 +115,7 @@ jobs:
 
           echo "Downloading verify.c from:"
           echo "${VERIFY_FILE_URL}"
+          echo
 
           curl \
             --fail \
@@ -121,16 +132,11 @@ jobs:
             exit 1
           fi
 
-          echo
           echo "Downloaded verify.c:"
           ls -lh ./verify.c
 
       # ----------------------------------------------------------
-      # 提交新的 verify.c
-      #
-      # 注意：
-      # 这里是在当前项目仓库中执行 git，
-      # 并不是 Sandboxie 仓库。
+      # 提交 verify.c 到当前项目仓库
       # ----------------------------------------------------------
 
       - name: Commit updated verify.c
@@ -153,19 +159,15 @@ jobs:
           fi
 
       # ----------------------------------------------------------
-      # 获取最终 commit SHA
-      #
-      # 如果 verify.c 有变化：
-      #   SHA = 刚刚创建并 push 的 commit
-      #
-      # 如果没有变化：
-      #   SHA = 当前 workflow checkout 的 commit
+      # 获取最终项目 commit SHA
       # ----------------------------------------------------------
 
       - name: Get final commit SHA
         id: commit_info
         shell: bash
         run: |
+          set -e
+
           COMMIT_SHA="$(git rev-parse HEAD)"
 
           echo "commit_sha=${COMMIT_SHA}" >> "${GITHUB_OUTPUT}"
@@ -174,9 +176,7 @@ jobs:
           echo "${COMMIT_SHA}"
 
       # ----------------------------------------------------------
-      # 上传最终使用的 verify.c
-      #
-      # 后面的两个 Build Job 都从这个 artifact 获取。
+      # 上传最终 verify.c
       # ----------------------------------------------------------
 
       - name: Upload verify.c
@@ -189,7 +189,7 @@ jobs:
 
 
   # ============================================================
-  # Build x64
+  # Build x64 Qt6
   # ============================================================
 
   Build_x64_Qt6:
@@ -199,6 +199,7 @@ jobs:
       - Update_verify
 
     runs-on: windows-2022
+
     timeout-minutes: 45
 
     permissions:
@@ -208,11 +209,7 @@ jobs:
     steps:
 
       # ----------------------------------------------------------
-      # Checkout Sandboxie
-      #
-      # 注意：
-      # 这里故意 checkout 到 ./Sandboxie
-      # 不再覆盖当前项目根目录。
+      # Checkout Sandboxie 到 ./Sandboxie
       # ----------------------------------------------------------
 
       - name: Checkout Sandboxie
@@ -224,7 +221,7 @@ jobs:
           fetch-depth: 1
 
       # ----------------------------------------------------------
-      # 获取 Update_verify Job 生成的 verify.c
+      # 下载 Update_verify 生成的 verify.c
       # ----------------------------------------------------------
 
       - name: Download verify.c
@@ -234,25 +231,40 @@ jobs:
           path: .
 
       # ----------------------------------------------------------
-      # 将 verify.c 放到 Sandboxie 源码目录
+      # 替换 Sandboxie 源码中的 verify.c
       # ----------------------------------------------------------
 
       - name: Replace Sandboxie verify.c
         shell: powershell
         run: |
-          if (!(Test-Path ".\verify.c")) {
-              throw "verify.c was not downloaded."
+          $source = Join-Path $env:GITHUB_WORKSPACE "verify.c"
+          $target = Join-Path $env:GITHUB_WORKSPACE "Sandboxie\Sandboxie\core\drv\verify.c"
+
+          Write-Host "Source:"
+          Write-Host $source
+          Write-Host ""
+
+          Write-Host "Target:"
+          Write-Host $target
+          Write-Host ""
+
+          if (!(Test-Path $source)) {
+              throw "Source verify.c not found: $source"
           }
 
-          $target = ".\Sandboxie\Sandboxie\core\drv\verify.c"
+          $targetDir = Split-Path $target -Parent
+
+          if (!(Test-Path $targetDir)) {
+              throw "Sandboxie verify.c directory not found: $targetDir"
+          }
 
           Copy-Item `
-            -Path ".\verify.c" `
+            -Path $source `
             -Destination $target `
             -Force
 
-          Write-Host "Sandboxie verify.c replaced successfully:"
-          Write-Host $target
+          Write-Host ""
+          Write-Host "verify.c successfully replaced."
 
       # ----------------------------------------------------------
       # Load Variables
@@ -302,7 +314,7 @@ jobs:
             -maxcpucount:8
 
       # ==========================================================
-      # Qt6
+      # Qt6 x64
       # ==========================================================
 
       - name: Install Qt6 x64
@@ -396,7 +408,7 @@ jobs:
 
 
   # ============================================================
-  # Build ARM64
+  # Build ARM64 Qt6
   # ============================================================
 
   Build_ARM64_Qt6:
@@ -406,6 +418,7 @@ jobs:
       - Update_verify
 
     runs-on: windows-2022
+
     timeout-minutes: 45
 
     permissions:
@@ -415,7 +428,7 @@ jobs:
     steps:
 
       # ----------------------------------------------------------
-      # Checkout Sandboxie
+      # Checkout Sandboxie 到 ./Sandboxie
       # ----------------------------------------------------------
 
       - name: Checkout Sandboxie
@@ -427,7 +440,7 @@ jobs:
           fetch-depth: 1
 
       # ----------------------------------------------------------
-      # 获取同一份 verify.c
+      # 下载 verify.c
       # ----------------------------------------------------------
 
       - name: Download verify.c
@@ -437,25 +450,40 @@ jobs:
           path: .
 
       # ----------------------------------------------------------
-      # 替换 Sandboxie verify.c
+      # 替换 Sandboxie 源码中的 verify.c
       # ----------------------------------------------------------
 
       - name: Replace Sandboxie verify.c
         shell: powershell
         run: |
-          if (!(Test-Path ".\verify.c")) {
-              throw "verify.c was not downloaded."
+          $source = Join-Path $env:GITHUB_WORKSPACE "verify.c"
+          $target = Join-Path $env:GITHUB_WORKSPACE "Sandboxie\Sandboxie\core\drv\verify.c"
+
+          Write-Host "Source:"
+          Write-Host $source
+          Write-Host ""
+
+          Write-Host "Target:"
+          Write-Host $target
+          Write-Host ""
+
+          if (!(Test-Path $source)) {
+              throw "Source verify.c not found: $source"
           }
 
-          $target = ".\Sandboxie\Sandboxie\core\drv\verify.c"
+          $targetDir = Split-Path $target -Parent
+
+          if (!(Test-Path $targetDir)) {
+              throw "Sandboxie verify.c directory not found: $targetDir"
+          }
 
           Copy-Item `
-            -Path ".\verify.c" `
+            -Path $source `
             -Destination $target `
             -Force
 
-          Write-Host "Sandboxie verify.c replaced successfully:"
-          Write-Host $target
+          Write-Host ""
+          Write-Host "verify.c successfully replaced."
 
       # ----------------------------------------------------------
       # Load Variables
@@ -512,24 +540,125 @@ jobs:
             -maxcpucount:8
 
       # ==========================================================
-      # Prepare Qt6
+      # Qt6 x64 Host
+      #
+      # qmake_plus.cmd ARM64 需要 x64 Host Qt
       # ==========================================================
 
-      - name: Install Qt6 x64
+      - name: Install Qt6 x64 Host
         uses: jurplel/install-qt-action@v4.3.1
         with:
           version: '${{ env.qt6_version }}'
+          host: 'windows'
+          target: 'desktop'
           arch: 'win64_msvc2022_64'
           tools: 'tools_opensslv3_x64'
           cache: true
+
+      # ==========================================================
+      # Qt6 ARM64 Target
+      # ==========================================================
 
       - name: Install Qt6 ARM64
         uses: jurplel/install-qt-action@v4.3.1
         with:
           version: '${{ env.qt6_version }}'
-          arch: 'win64_msvc2022_arm64_cross_compiled'
+          host: 'windows'
+          target: 'desktop'
+          arch: 'win64_msvc2022_arm64'
           tools: 'tools_opensslv3_x64'
           cache: true
+
+      # ==========================================================
+      # 验证 Qt 安装
+      #
+      # 注意：
+      # install-qt-action 默认 Qt 位于 runner.workspace\Qt
+      # 日志中的实际路径：
+      # D:\a\BarryChristmas\Qt
+      # 而 github.workspace 是：
+      # D:\a\BarryChristmas\BarryChristmas
+      # ==========================================================
+
+      - name: Verify Qt6 ARM64 installation
+        shell: powershell
+        run: |
+          $qtVersion = "${{ env.qt6_version }}"
+
+          $qtRoot = Join-Path $env:RUNNER_WORKSPACE "Qt"
+          $hostQt = Join-Path $qtRoot "$qtVersion\msvc2022_64"
+          $armQt = Join-Path $qtRoot "$qtVersion\msvc2022_arm64"
+
+          Write-Host "Qt root:"
+          Write-Host $qtRoot
+          Write-Host ""
+
+          Write-Host "Host Qt:"
+          Write-Host $hostQt
+          Write-Host ""
+
+          Write-Host "ARM64 Qt:"
+          Write-Host $armQt
+          Write-Host ""
+
+          # ------------------------------------------------------
+          # Host qmake
+          # ------------------------------------------------------
+
+          $hostQmake = Join-Path $hostQt "bin\qmake.exe"
+
+          if (!(Test-Path $hostQmake)) {
+              throw "Host qmake.exe not found: $hostQmake"
+          }
+
+          Write-Host "OK - Host qmake:"
+          Write-Host $hostQmake
+          Write-Host ""
+
+          # ------------------------------------------------------
+          # ARM64 Qt root
+          # ------------------------------------------------------
+
+          if (!(Test-Path $armQt)) {
+              throw "ARM64 Qt directory not found: $armQt"
+          }
+
+          Write-Host "OK - ARM64 Qt directory exists."
+          Write-Host ""
+
+          # ------------------------------------------------------
+          # ARM64 QtCore private headers
+          #
+          # qmake_plus.cmd 会访问这个目录
+          # ------------------------------------------------------
+
+          $qtCorePrivate = Join-Path `
+            $armQt `
+            "include\QtCore\$qtVersion\QtCore"
+
+          if (!(Test-Path $qtCorePrivate)) {
+              throw "QtCore private headers not found: $qtCorePrivate"
+          }
+
+          Write-Host "OK - QtCore private headers:"
+          Write-Host $qtCorePrivate
+          Write-Host ""
+
+          # ------------------------------------------------------
+          # ARM64 qmake 配置文件所在目录
+          # ------------------------------------------------------
+
+          $armBin = Join-Path $armQt "bin"
+
+          if (!(Test-Path $armBin)) {
+              throw "ARM64 Qt bin directory not found: $armBin"
+          }
+
+          Write-Host "OK - ARM64 Qt bin:"
+          Write-Host $armBin
+          Write-Host ""
+
+          Write-Host "Qt verification completed successfully."
 
       # ==========================================================
       # Jom
@@ -557,7 +686,8 @@ jobs:
 
       - name: Build Sandboxie-Plus ARM64
         working-directory: Sandboxie
-        run: SandboxiePlus\qmake_plus.cmd ARM64 build_qt6
+        run: |
+          SandboxiePlus\qmake_plus.cmd ARM64 build_qt6
 
       - name: Build SbieShell ARM64
         working-directory: Sandboxie
@@ -614,9 +744,12 @@ jobs:
 
 
   # ============================================================
-  # Create Release
+  # Create GitHub Release
   #
-  # 只有 x64 + ARM64 都成功后才运行
+  # 必须：
+  # Update_verify 成功
+  # x64 成功
+  # ARM64 成功
   # ============================================================
 
   Release:
@@ -636,7 +769,7 @@ jobs:
     steps:
 
       # ----------------------------------------------------------
-      # 下载 x64
+      # 下载 x64 artifact
       # ----------------------------------------------------------
 
       - name: Download x64 artifact
@@ -646,7 +779,7 @@ jobs:
           path: ./release/x64
 
       # ----------------------------------------------------------
-      # 下载 ARM64
+      # 下载 ARM64 artifact
       # ----------------------------------------------------------
 
       - name: Download ARM64 artifact
@@ -656,7 +789,7 @@ jobs:
           path: ./release/ARM64
 
       # ----------------------------------------------------------
-      # 准备 Release 文件
+      # 检查并准备 Release 文件
       # ----------------------------------------------------------
 
       - name: Prepare release files
@@ -692,8 +825,9 @@ jobs:
       # ----------------------------------------------------------
       # 创建 Release
       #
-      # 使用 Update_verify 最终产生的 commit SHA，
-      # 确保 release tag 指向包含最新 verify.c 的项目提交。
+      # TARGET_SHA 是 Update_verify 最终得到的项目 commit。
+      # 如果 verify.c 被更新，这个 SHA 就是新的 commit；
+      # 如果没有更新，就是原来的 commit。
       # ----------------------------------------------------------
 
       - name: Create GitHub Release
@@ -701,11 +835,19 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.release_version_tag }}
           TARGET_SHA: ${{ needs.Update_verify.outputs.commit_sha }}
+        shell: bash
         run: |
           set -e
 
-          echo "Release tag : ${RELEASE_TAG}"
-          echo "Target SHA  : ${TARGET_SHA}"
+          echo "Release tag:"
+          echo "${RELEASE_TAG}"
+
+          echo
+          echo "Release target:"
+          echo "${TARGET_SHA}"
+
+          echo
+          echo "Creating GitHub Release..."
 
           gh release create \
             "${RELEASE_TAG}" \
@@ -714,3 +856,6 @@ jobs:
             --target "${TARGET_SHA}" \
             --title "${RELEASE_TAG}" \
             --notes "Automated Sandboxie build ${RELEASE_TAG}."
+
+          echo
+          echo "Release created successfully."
