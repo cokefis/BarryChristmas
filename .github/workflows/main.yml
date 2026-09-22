@@ -9,63 +9,312 @@ on:
         default: 'v1.18.2'
         type: string
 
+      verify_file_url:
+        description: 'verify.c 文件链接'
+        required: true
+        default: 'https://raw.githubusercontent.com/cokefis/BarryChristmas/master/verify.c'
+        type: string
+
 env:
   forbuildVariables: use Installer\buildVariables.cmd file
-  verify_file_url: https://raw.githubusercontent.com/cokefis/BarryChristmas/master/verify.c
+  DEFAULT_VERIFY_FILE_URL: 'https://raw.githubusercontent.com/cokefis/BarryChristmas/master/verify.c'
+
+
+# 防止同一个分支同时运行多个构建，尤其是避免 verify.c git push 冲突
+concurrency:
+  group: crack-${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: false
+
 
 jobs:
 
-  Build_x64_Qt6:
-    runs-on: windows-2022
-    timeout-minutes: 45
+  # ============================================================
+  # Update verify.c
+  #
+  # 作用：
+  # 1. Checkout 当前项目，而不是 Sandboxie 仓库
+  # 2. 如果 verify_file_url != 默认 URL，则下载新的 verify.c
+  # 3. 提交到当前项目仓库根目录
+  # 4. 把最终使用的 verify.c 上传为 artifact
+  # ============================================================
+
+  Update_verify:
+    name: Update verify.c
+    runs-on: ubuntu-latest
+
     permissions:
-      contents: read
+      contents: write
+
+    outputs:
+      commit_sha: ${{ steps.commit_info.outputs.commit_sha }}
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v7
+
+      # ----------------------------------------------------------
+      # Checkout 当前项目仓库
+      # ----------------------------------------------------------
+
+      - name: Checkout current project
+        uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 1
+
+      # ----------------------------------------------------------
+      # 检查 workflow 是否从 branch 运行
+      #
+      # 因为后面需要 git push。
+      # workflow_dispatch 从 branch 运行时 github.ref_type = branch。
+      # ----------------------------------------------------------
+
+      - name: Check ref type
+        if: ${{ inputs.verify_file_url != env.DEFAULT_VERIFY_FILE_URL }}
+        shell: bash
+        run: |
+          if [ "${GITHUB_REF_TYPE}" != "branch" ]; then
+            echo "ERROR: verify_file_url 与默认值不同，需要提交 verify.c。"
+            echo "但是当前 workflow 不是从 branch 运行。"
+            echo "请从一个 branch 手动运行 workflow_dispatch。"
+            exit 1
+          fi
+
+      # ----------------------------------------------------------
+      # 确保默认 verify.c 存在
+      # ----------------------------------------------------------
+
+      - name: Check existing verify.c
+        if: ${{ inputs.verify_file_url == env.DEFAULT_VERIFY_FILE_URL }}
+        shell: bash
+        run: |
+          if [ ! -f "./verify.c" ]; then
+            echo "ERROR: 当前项目根目录不存在 verify.c。"
+            exit 1
+          fi
+
+      # ----------------------------------------------------------
+      # 当输入 URL 与默认 URL 不同时：
+      # 下载新的 verify.c
+      # ----------------------------------------------------------
+
+      - name: Download verify.c
+        if: ${{ inputs.verify_file_url != env.DEFAULT_VERIFY_FILE_URL }}
+        shell: bash
+        env:
+          VERIFY_FILE_URL: ${{ inputs.verify_file_url }}
+        run: |
+          set -e
+
+          echo "Downloading verify.c from:"
+          echo "${VERIFY_FILE_URL}"
+
+          curl \
+            --fail \
+            --location \
+            --retry 3 \
+            --retry-all-errors \
+            --connect-timeout 15 \
+            --max-time 120 \
+            "${VERIFY_FILE_URL}" \
+            -o "./verify.c"
+
+          if [ ! -s "./verify.c" ]; then
+            echo "ERROR: 下载后的 verify.c 不存在或为空。"
+            exit 1
+          fi
+
+          echo
+          echo "Downloaded verify.c:"
+          ls -lh ./verify.c
+
+      # ----------------------------------------------------------
+      # 提交新的 verify.c
+      #
+      # 注意：
+      # 这里是在当前项目仓库中执行 git，
+      # 并不是 Sandboxie 仓库。
+      # ----------------------------------------------------------
+
+      - name: Commit updated verify.c
+        if: ${{ inputs.verify_file_url != env.DEFAULT_VERIFY_FILE_URL }}
+        shell: bash
+        run: |
+          set -e
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add verify.c
+
+          if git diff --cached --quiet; then
+            echo "verify.c 内容没有发生变化，不创建 commit。"
+          else
+            git commit -m "Update verify.c for ${{ inputs.release_version_tag }}"
+
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
+
+      # ----------------------------------------------------------
+      # 获取最终 commit SHA
+      #
+      # 如果 verify.c 有变化：
+      #   SHA = 刚刚创建并 push 的 commit
+      #
+      # 如果没有变化：
+      #   SHA = 当前 workflow checkout 的 commit
+      # ----------------------------------------------------------
+
+      - name: Get final commit SHA
+        id: commit_info
+        shell: bash
+        run: |
+          COMMIT_SHA="$(git rev-parse HEAD)"
+
+          echo "commit_sha=${COMMIT_SHA}" >> "${GITHUB_OUTPUT}"
+
+          echo "Final project commit:"
+          echo "${COMMIT_SHA}"
+
+      # ----------------------------------------------------------
+      # 上传最终使用的 verify.c
+      #
+      # 后面的两个 Build Job 都从这个 artifact 获取。
+      # ----------------------------------------------------------
+
+      - name: Upload verify.c
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: verify-c
+          path: verify.c
+          retention-days: 1
+          if-no-files-found: error
+
+
+  # ============================================================
+  # Build x64
+  # ============================================================
+
+  Build_x64_Qt6:
+    name: Build x64 Qt6
+
+    needs:
+      - Update_verify
+
+    runs-on: windows-2022
+    timeout-minutes: 45
+
+    permissions:
+      contents: read
+      actions: read
+
+    steps:
+
+      # ----------------------------------------------------------
+      # Checkout Sandboxie
+      #
+      # 注意：
+      # 这里故意 checkout 到 ./Sandboxie
+      # 不再覆盖当前项目根目录。
+      # ----------------------------------------------------------
+
+      - name: Checkout Sandboxie
+        uses: actions/checkout@v7.0.1
         with:
           repository: sandboxie-plus/Sandboxie
           ref: ${{ inputs.release_version_tag }}
+          path: Sandboxie
+          fetch-depth: 1
 
-      - name: Replace verify.c
-        run: |
-          Invoke-WebRequest -Uri ${{ env.verify_file_url }} -OutFile ./Sandboxie/core/drv/verify.c
+      # ----------------------------------------------------------
+      # 获取 Update_verify Job 生成的 verify.c
+      # ----------------------------------------------------------
+
+      - name: Download verify.c
+        uses: actions/download-artifact@v8.0.1
+        with:
+          name: verify-c
+          path: .
+
+      # ----------------------------------------------------------
+      # 将 verify.c 放到 Sandboxie 源码目录
+      # ----------------------------------------------------------
+
+      - name: Replace Sandboxie verify.c
         shell: powershell
+        run: |
+          if (!(Test-Path ".\verify.c")) {
+              throw "verify.c was not downloaded."
+          }
+
+          Copy-Item `
+            -Path ".\verify.c" `
+            -Destination ".\Sandboxie\core\drv\verify.c" `
+            -Force
+
+          Write-Host "Sandboxie verify.c replaced successfully."
+
+      # ----------------------------------------------------------
+      # Load Variables
+      # ----------------------------------------------------------
 
       - name: Load Variables from buildVariables.cmd
         shell: cmd
         run: |
           @echo on
-          call "${{ github.workspace }}\Installer\buildVariables.cmd" build_qt6
+          call "${{ github.workspace }}\Sandboxie\Installer\buildVariables.cmd" build_qt6
           echo qt6_version=%qt6_version% >> %GITHUB_ENV%
           echo qt_version=%qt6_version% >> %GITHUB_ENV%
+
+      # ----------------------------------------------------------
+      # Setup MSBuild
+      # ----------------------------------------------------------
 
       - name: Setup msbuild
         uses: microsoft/setup-msbuild@v3
 
-      #
+      # ==========================================================
       # Compile Sandboxie Core
-      #
+      # ==========================================================
 
       - name: Build Sandboxie x86 (DLLs & svc)
-        run: msbuild /t:build Sandboxie\SandboxDll.sln /p:Configuration="SbieRelease" /p:Platform=Win32 -maxcpucount:8
+        working-directory: Sandboxie
+        run: |
+          msbuild /t:build Sandboxie\SandboxDll.sln `
+            /p:Configuration="SbieRelease" `
+            /p:Platform=Win32 `
+            -maxcpucount:8
 
       - name: Build Sandboxie x64 (all)
-        run: msbuild /t:build Sandboxie\Sandbox.sln /p:Configuration="SbieRelease" /p:Platform=x64 -maxcpucount:8
+        working-directory: Sandboxie
+        run: |
+          msbuild /t:build Sandboxie\Sandbox.sln `
+            /p:Configuration="SbieRelease" `
+            /p:Platform=x64 `
+            -maxcpucount:8
 
       - name: Build Sandboxie x64 (drv)
-        run: msbuild /t:build Sandboxie\SandboxDrv.sln /p:Configuration="SbieRelease" /p:Platform=x64 -maxcpucount:8
+        working-directory: Sandboxie
+        run: |
+          msbuild /t:build Sandboxie\SandboxDrv.sln `
+            /p:Configuration="SbieRelease" `
+            /p:Platform=x64 `
+            -maxcpucount:8
+
+      # ==========================================================
+      # Qt6
+      # ==========================================================
 
       - name: Install Qt6 x64
+        working-directory: Sandboxie
         run: SandboxiePlus\install_qt.cmd x64
 
-      # Jom cache restore (and post-job save on miss)
+      # ==========================================================
+      # Jom
+      # ==========================================================
+
       - name: Cache jom archive
         id: cache-jom
         uses: actions/cache@v6.1.0
         with:
-          path: jom_1_1_4.zip
+          path: Sandboxie/jom_1_1_4.zip
           key: jom-1.1.4-${{ runner.os }}
           restore-keys: |
             jom-1.1.4-
@@ -74,134 +323,217 @@ jobs:
 
       - name: Installing Jom
         shell: cmd
+        working-directory: Sandboxie
         run: SandboxiePlus\install_jom.cmd
 
-      #
+      # ==========================================================
       # Compile Sandboxie Plus
-      #
+      # ==========================================================
 
       - name: Build Sandboxie-Plus x64
+        working-directory: Sandboxie
         run: SandboxiePlus\qmake_plus.cmd x64 build_qt6
 
       - name: Build SbieShell x64
-        run: msbuild /t:restore,build -p:RestorePackagesConfig=true SandboxiePlus\SbieShell\SbieShell.sln /p:Configuration="Release" /p:Platform=x64
+        working-directory: Sandboxie
+        run: |
+          msbuild /t:restore,build `
+            -p:RestorePackagesConfig=true `
+            SandboxiePlus\SbieShell\SbieShell.sln `
+            /p:Configuration="Release" `
+            /p:Platform=x64
 
-      #
+      # ==========================================================
       # Compile Sandboxie Tools
-      #
+      # ==========================================================
 
       - name: Build Sandboxie-Tools x64
-        run: msbuild /t:build SandboxieTools\SandboxieTools.sln /p:Configuration="Release" /p:Platform=x64 -maxcpucount:8
+        working-directory: Sandboxie
+        run: |
+          msbuild /t:build SandboxieTools\SandboxieTools.sln `
+            /p:Configuration="Release" `
+            /p:Platform=x64 `
+            -maxcpucount:8
 
-      #
-      # Merge everything together
-      #
+      # ==========================================================
+      # Merge everything
+      # ==========================================================
 
-      # - name: Add Windows 7 compatible Qt6 DLLs
-      #   run: Installer\fix_qt6_win7.cmd
-
-      - name: Add missing languages for Qt6 (issue 1528)
+      - name: Add missing languages for Qt6
+        working-directory: Sandboxie
         run: Installer\fix_qt5_languages.cmd x64 build_qt6
 
       - name: Get openssl binaries
+        working-directory: Sandboxie
         run: Installer\get_openssl.cmd
 
       - name: Get 7z binaries
+        working-directory: Sandboxie
         run: Installer\get_7zip.cmd
 
       - name: Merging Build
+        working-directory: Sandboxie
         run: Installer\copy_build.cmd x64 build_qt6
 
       - name: Collect installer assets
+        working-directory: Sandboxie
         run: Installer\get_assets.cmd
 
+      # ==========================================================
+      # Upload x64 driver
+      # ==========================================================
+
       - name: Upload Sandboxie x64
-        #if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
         uses: actions/upload-artifact@v7.0.1
         with:
           name: Sandboxie_x64
-          path: |
-            Installer/SbiePlus_x64/SbieDrv.sys
+          path: Sandboxie/Installer/SbiePlus_x64/SbieDrv.sys
           retention-days: 60
+          if-no-files-found: error
 
+
+  # ============================================================
+  # Build ARM64
+  # ============================================================
 
   Build_ARM64_Qt6:
+    name: Build ARM64 Qt6
+
+    needs:
+      - Update_verify
+
     runs-on: windows-2022
     timeout-minutes: 45
+
     permissions:
       contents: read
+      actions: read
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v7
+
+      # ----------------------------------------------------------
+      # Checkout Sandboxie
+      # ----------------------------------------------------------
+
+      - name: Checkout Sandboxie
+        uses: actions/checkout@v7.0.1
         with:
           repository: sandboxie-plus/Sandboxie
           ref: ${{ inputs.release_version_tag }}
+          path: Sandboxie
+          fetch-depth: 1
 
-      - name: Replace verify.c
+      # ----------------------------------------------------------
+      # 获取同一份 verify.c
+      # ----------------------------------------------------------
+
+      - name: Download verify.c
+        uses: actions/download-artifact@v8.0.1
+        with:
+          name: verify-c
+          path: .
+
+      # ----------------------------------------------------------
+      # 替换 Sandboxie verify.c
+      # ----------------------------------------------------------
+
+      - name: Replace Sandboxie verify.c
+        shell: powershell
         run: |
-          Invoke-WebRequest -Uri ${{ env.verify_file_url }} -OutFile ./Sandboxie/core/drv/verify.c
+          if (!(Test-Path ".\verify.c")) {
+              throw "verify.c was not downloaded."
+          }
+
+          Copy-Item `
+            -Path ".\verify.c" `
+            -Destination ".\Sandboxie\core\drv\verify.c" `
+            -Force
+
+          Write-Host "Sandboxie verify.c replaced successfully."
+
+      # ----------------------------------------------------------
+      # Load Variables
+      # ----------------------------------------------------------
 
       - name: Load Variables from buildVariables.cmd
         shell: cmd
         run: |
           @echo on
-          call "${{ github.workspace }}\Installer\buildVariables.cmd" build_qt6
+          call "${{ github.workspace }}\Sandboxie\Installer\buildVariables.cmd" build_qt6
           echo qt6_version=%qt6_version% >> %GITHUB_ENV%
+
+      # ----------------------------------------------------------
+      # Setup MSBuild
+      # ----------------------------------------------------------
 
       - name: Setup msbuild
         uses: microsoft/setup-msbuild@v3
 
-      #
+      # ==========================================================
       # Compile Sandboxie Core
-      #
+      # ==========================================================
 
       - name: Build Sandboxie x86 (DLLs & svc)
-        run: msbuild /t:build Sandboxie\SandboxDll.sln /p:Configuration="SbieRelease" /p:Platform=Win32 -maxcpucount:8
+        working-directory: Sandboxie
+        run: |
+          msbuild /t:build Sandboxie\SandboxDll.sln `
+            /p:Configuration="SbieRelease" `
+            /p:Platform=Win32 `
+            -maxcpucount:8
 
       - name: Build Sandboxie ARM64 (all)
-        run: msbuild /t:build Sandboxie\Sandbox.sln /p:Configuration="SbieRelease" /p:Platform=ARM64 -maxcpucount:8
+        working-directory: Sandboxie
+        run: |
+          msbuild /t:build Sandboxie\Sandbox.sln `
+            /p:Configuration="SbieRelease" `
+            /p:Platform=ARM64 `
+            -maxcpucount:8
 
       - name: Build Sandboxie ARM64EC (DLL)
-        run: msbuild /t:build Sandboxie\SandboxDll.sln /p:Configuration="SbieRelease" /p:Platform=ARM64EC -maxcpucount:8
+        working-directory: Sandboxie
+        run: |
+          msbuild /t:build Sandboxie\SandboxDll.sln `
+            /p:Configuration="SbieRelease" `
+            /p:Platform=ARM64EC `
+            -maxcpucount:8
 
       - name: Build Sandboxie ARM64 (drv)
-        run: msbuild /t:build Sandboxie\SandboxDrv.sln /p:Configuration="SbieRelease" /p:Platform=ARM64 -maxcpucount:8
+        working-directory: Sandboxie
+        run: |
+          msbuild /t:build Sandboxie\SandboxDrv.sln `
+            /p:Configuration="SbieRelease" `
+            /p:Platform=ARM64 `
+            -maxcpucount:8
 
-      #
-      # Prepare Qt Framework for ARM64 (we also need Qt x64 for some utilities like qmake)
-      #
+      # ==========================================================
+      # Prepare Qt6
+      # ==========================================================
 
       - name: Install Qt6 x64
         uses: jurplel/install-qt-action@v4.3.1
         with:
-      #    version: '6.2.4'
           version: '${{ env.qt6_version }}'
-      #    dir: ..
-      #    arch:  ${{ matrix.qt-target }}
           arch: 'win64_msvc2022_64'
-      #    tools: 'tools_qtcreator,4.14.0-0-202012170949,qt.tools.qtcreator'
           tools: 'tools_opensslv3_x64'
           cache: true
 
       - name: Install Qt6 ARM64
         uses: jurplel/install-qt-action@v4.3.1
         with:
-      #    version: '6.2.4'
           version: '${{ env.qt6_version }}'
-      #    dir: ..
-      #    arch:  ${{ matrix.qt-target }}
           arch: 'win64_msvc2022_arm64_cross_compiled'
-      #    tools: 'tools_qtcreator,4.14.0-0-202012170949,qt.tools.qtcreator'
           tools: 'tools_opensslv3_x64'
           cache: true
 
-      # Jom cache restore (and post-job save on miss)
+      # ==========================================================
+      # Jom
+      # ==========================================================
+
       - name: Cache jom archive
         id: cache-jom
         uses: actions/cache@v6.1.0
         with:
-          path: jom_1_1_4.zip
+          path: Sandboxie/jom_1_1_4.zip
           key: jom-1.1.4-${{ runner.os }}
           restore-keys: |
             jom-1.1.4-
@@ -210,46 +542,169 @@ jobs:
 
       - name: Installing Jom
         shell: cmd
+        working-directory: Sandboxie
         run: SandboxiePlus\install_jom.cmd
 
-      #
+      # ==========================================================
       # Compile Sandboxie Plus
-      #
+      # ==========================================================
 
       - name: Build Sandboxie-Plus ARM64
+        working-directory: Sandboxie
         run: SandboxiePlus\qmake_plus.cmd ARM64 build_qt6
 
       - name: Build SbieShell ARM64
-        run: msbuild /t:restore,build -p:RestorePackagesConfig=true SandboxiePlus\SbieShell\SbieShell.sln /p:Configuration="Release" /p:Platform=ARM64
+        working-directory: Sandboxie
+        run: |
+          msbuild /t:restore,build `
+            -p:RestorePackagesConfig=true `
+            SandboxiePlus\SbieShell\SbieShell.sln `
+            /p:Configuration="Release" `
+            /p:Platform=ARM64
 
-      #
+      # ==========================================================
       # Compile Sandboxie Tools
-      #
+      # ==========================================================
 
       - name: Build Sandboxie-Tools ARM64
-        run: msbuild /t:build SandboxieTools\SandboxieTools.sln /p:Configuration="Release" /p:Platform=ARM64 -maxcpucount:8
+        working-directory: Sandboxie
+        run: |
+          msbuild /t:build SandboxieTools\SandboxieTools.sln `
+            /p:Configuration="Release" `
+            /p:Platform=ARM64 `
+            -maxcpucount:8
 
-      #
-      # Merge everything together
-      #
+      # ==========================================================
+      # Merge everything
+      # ==========================================================
 
-      - name: Add missing languages for Qt6 (issue 1528)
+      - name: Add missing languages for Qt6
+        working-directory: Sandboxie
         run: Installer\fix_qt5_languages.cmd x64 build_qt6
 
       - name: Get openssl binaries
+        working-directory: Sandboxie
         run: Installer\get_openssl.cmd
 
       - name: Get 7z binaries
+        working-directory: Sandboxie
         run: Installer\get_7zip.cmd
 
       - name: Merging Build
+        working-directory: Sandboxie
         run: Installer\copy_build.cmd ARM64 build_qt6
 
+      # ==========================================================
+      # Upload ARM64 driver
+      # ==========================================================
+
       - name: Upload Sandboxie ARM64
-        #if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
         uses: actions/upload-artifact@v7.0.1
         with:
           name: Sandboxie_ARM64
-          path: |
-            Installer/SbiePlus_a64/SbieDrv.sys
+          path: Sandboxie/Installer/SbiePlus_a64/SbieDrv.sys
           retention-days: 60
+          if-no-files-found: error
+
+
+  # ============================================================
+  # Create Release
+  #
+  # 只有 x64 + ARM64 都成功后才运行
+  # ============================================================
+
+  Release:
+    name: Create GitHub Release
+
+    needs:
+      - Update_verify
+      - Build_x64_Qt6
+      - Build_ARM64_Qt6
+
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+      actions: read
+
+    steps:
+
+      # ----------------------------------------------------------
+      # 下载 x64
+      # ----------------------------------------------------------
+
+      - name: Download x64 artifact
+        uses: actions/download-artifact@v8.0.1
+        with:
+          name: Sandboxie_x64
+          path: ./release/x64
+
+      # ----------------------------------------------------------
+      # 下载 ARM64
+      # ----------------------------------------------------------
+
+      - name: Download ARM64 artifact
+        uses: actions/download-artifact@v8.0.1
+        with:
+          name: Sandboxie_ARM64
+          path: ./release/ARM64
+
+      # ----------------------------------------------------------
+      # 准备 Release 文件
+      # ----------------------------------------------------------
+
+      - name: Prepare release files
+        shell: bash
+        run: |
+          set -e
+
+          X64_FILE="./release/x64/SbieDrv.sys"
+          ARM64_FILE="./release/ARM64/SbieDrv.sys"
+
+          if [ ! -f "${X64_FILE}" ]; then
+            echo "ERROR: x64 SbieDrv.sys not found."
+            exit 1
+          fi
+
+          if [ ! -f "${ARM64_FILE}" ]; then
+            echo "ERROR: ARM64 SbieDrv.sys not found."
+            exit 1
+          fi
+
+          mv \
+            "${X64_FILE}" \
+            "./release/Sandboxie_x64_SbieDrv.sys"
+
+          mv \
+            "${ARM64_FILE}" \
+            "./release/Sandboxie_ARM64_SbieDrv.sys"
+
+          echo
+          echo "Release files:"
+          ls -lh ./release/
+
+      # ----------------------------------------------------------
+      # 创建 Release
+      #
+      # 使用 Update_verify 最终产生的 commit SHA，
+      # 确保 release tag 指向包含最新 verify.c 的项目提交。
+      # ----------------------------------------------------------
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_version_tag }}
+          TARGET_SHA: ${{ needs.Update_verify.outputs.commit_sha }}
+        run: |
+          set -e
+
+          echo "Release tag : ${RELEASE_TAG}"
+          echo "Target SHA  : ${TARGET_SHA}"
+
+          gh release create \
+            "${RELEASE_TAG}" \
+            "./release/Sandboxie_x64_SbieDrv.sys" \
+            "./release/Sandboxie_ARM64_SbieDrv.sys" \
+            --target "${TARGET_SHA}" \
+            --title "${RELEASE_TAG}" \
+            --notes "Automated Sandboxie build ${RELEASE_TAG}."
