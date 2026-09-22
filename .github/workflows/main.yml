@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       release_version_tag:
-        description: '要构建的 Sandboxie release 版本号（例如 v1.18.2）'
+        description: '要构建的 Sandboxie release 版本号（例如 v1.18.4）'
         required: true
-        default: 'v1.18.2'
+        default: 'v1.18.4'
         type: string
 
       verify_file_url:
@@ -23,7 +23,9 @@ env:
 jobs:
 
   # ============================================================
-  # 更新 verify.c
+  # Update verify.c
+  #
+  # 只负责操作当前项目仓库
   # ============================================================
 
   Update_verify:
@@ -43,7 +45,7 @@ jobs:
         uses: actions/checkout@v7
 
       # ----------------------------------------------------------
-      # 如果输入 URL 与默认值不同，则下载 verify.c
+      # 如果输入 URL 与默认 URL 不同，则下载 verify.c
       # ----------------------------------------------------------
 
       - name: Download verify.c
@@ -80,7 +82,7 @@ jobs:
           }
 
       # ----------------------------------------------------------
-      # 无论是否下载，都检查项目根目录 verify.c
+      # 检查最终 verify.c
       # ----------------------------------------------------------
 
       - name: Check verify.c
@@ -94,7 +96,7 @@ jobs:
           Get-Item ".\verify.c" | Format-List FullName,Length,LastWriteTime
 
       # ----------------------------------------------------------
-      # 上传最终使用的 verify.c
+      # 上传最终 verify.c
       # ----------------------------------------------------------
 
       - name: Upload verify.c
@@ -108,6 +110,10 @@ jobs:
 
   # ============================================================
   # Build x64 Qt6
+  #
+  # 注意：
+  # Sandboxie 直接 checkout 到工作区根目录。
+  # 不再使用 path: Sandboxie
   # ============================================================
 
   Build_x64_Qt6:
@@ -124,7 +130,9 @@ jobs:
     steps:
 
       # ----------------------------------------------------------
-      # Checkout Sandboxie 到 Sandboxie 子目录
+      # Checkout Sandboxie 到工作区根目录
+      #
+      # 恢复原始 YML 的目录结构
       # ----------------------------------------------------------
 
       - name: Checkout code
@@ -132,7 +140,6 @@ jobs:
         with:
           repository: sandboxie-plus/Sandboxie
           ref: ${{ inputs.release_version_tag }}
-          path: Sandboxie
 
       # ----------------------------------------------------------
       # 获取 verify.c
@@ -145,27 +152,21 @@ jobs:
           path: .
 
       # ----------------------------------------------------------
-      # 替换 Sandboxie 内的 verify.c
+      # 替换 Sandboxie 的 verify.c
       #
-      # 当前 working-directory = Sandboxie
-      #
-      # 所以：
-      # ..\verify.c
-      # ->
-      # Sandboxie\core\drv\verify.c
+      # 当前目录就是 Sandboxie 仓库根目录
       # ----------------------------------------------------------
 
       - name: Replace verify.c
-        working-directory: Sandboxie
         shell: powershell
         run: |
-          if (!(Test-Path "..\verify.c")) {
+          if (!(Test-Path ".\verify.c")) {
               throw "verify.c not found."
           }
 
           Copy-Item `
-            -Path "..\verify.c" `
-            -Destination "Sandboxie\core\drv\verify.c" `
+            -Path ".\verify.c" `
+            -Destination ".\Sandboxie\core\drv\verify.c" `
             -Force
 
       # ----------------------------------------------------------
@@ -176,7 +177,7 @@ jobs:
         shell: cmd
         run: |
           @echo on
-          call "${{ github.workspace }}\Sandboxie\Installer\buildVariables.cmd" build_qt6
+          call "${{ github.workspace }}\Installer\buildVariables.cmd" build_qt6
           echo qt6_version=%qt6_version% >> %GITHUB_ENV%
           echo qt_version=%qt6_version% >> %GITHUB_ENV%
 
@@ -187,35 +188,29 @@ jobs:
       - name: Setup msbuild
         uses: microsoft/setup-msbuild@v3
 
-      # ==========================================================
+      #
       # Compile Sandboxie Core
-      # ==========================================================
+      #
 
       - name: Build Sandboxie x86 (DLLs & svc)
-        working-directory: Sandboxie
         run: msbuild /t:build Sandboxie\SandboxDll.sln /p:Configuration="SbieRelease" /p:Platform=Win32 -maxcpucount:8
 
       - name: Build Sandboxie x64 (all)
-        working-directory: Sandboxie
         run: msbuild /t:build Sandboxie\Sandbox.sln /p:Configuration="SbieRelease" /p:Platform=x64 -maxcpucount:8
 
       - name: Build Sandboxie x64 (drv)
-        working-directory: Sandboxie
         run: msbuild /t:build Sandboxie\SandboxDrv.sln /p:Configuration="SbieRelease" /p:Platform=x64 -maxcpucount:8
 
       - name: Install Qt6 x64
-        working-directory: Sandboxie
         run: SandboxiePlus\install_qt.cmd x64
 
-      # ==========================================================
-      # Jom
-      # ==========================================================
+      # Jom cache restore (and post-job save on miss)
 
       - name: Cache jom archive
         id: cache-jom
         uses: actions/cache@v6.1.0
         with:
-          path: Sandboxie/jom_1_1_4.zip
+          path: jom_1_1_4.zip
           key: jom-1.1.4-${{ runner.os }}
           restore-keys: |
             jom-1.1.4-
@@ -224,68 +219,61 @@ jobs:
 
       - name: Installing Jom
         shell: cmd
-        working-directory: Sandboxie
         run: SandboxiePlus\install_jom.cmd
 
-      # ==========================================================
+      #
       # Compile Sandboxie Plus
-      # ==========================================================
+      #
 
       - name: Build Sandboxie-Plus x64
-        working-directory: Sandboxie
         run: SandboxiePlus\qmake_plus.cmd x64 build_qt6
 
       - name: Build SbieShell x64
-        working-directory: Sandboxie
         run: msbuild /t:restore,build -p:RestorePackagesConfig=true SandboxiePlus\SbieShell\SbieShell.sln /p:Configuration="Release" /p:Platform=x64
 
-      # ==========================================================
+      #
       # Compile Sandboxie Tools
-      # ==========================================================
+      #
 
       - name: Build Sandboxie-Tools x64
-        working-directory: Sandboxie
         run: msbuild /t:build SandboxieTools\SandboxieTools.sln /p:Configuration="Release" /p:Platform=x64 -maxcpucount:8
 
-      # ==========================================================
+      #
       # Merge everything together
-      # ==========================================================
+      #
 
       - name: Add missing languages for Qt6 (issue 1528)
-        working-directory: Sandboxie
         run: Installer\fix_qt5_languages.cmd x64 build_qt6
 
       - name: Get openssl binaries
-        working-directory: Sandboxie
         run: Installer\get_openssl.cmd
 
       - name: Get 7z binaries
-        working-directory: Sandboxie
         run: Installer\get_7zip.cmd
 
       - name: Merging Build
-        working-directory: Sandboxie
         run: Installer\copy_build.cmd x64 build_qt6
 
       - name: Collect installer assets
-        working-directory: Sandboxie
         run: Installer\get_assets.cmd
 
-      # ==========================================================
+      # ----------------------------------------------------------
       # Upload x64
-      # ==========================================================
+      # ----------------------------------------------------------
 
       - name: Upload Sandboxie x64
         uses: actions/upload-artifact@v7.0.1
         with:
           name: Sandboxie_x64
-          path: Sandboxie/Installer/SbiePlus_x64/SbieDrv.sys
+          path: Installer/SbiePlus_x64/SbieDrv.sys
           retention-days: 60
           if-no-files-found: error
 
 
   # ============================================================
   # Build ARM64 Qt6
+  #
+  # 完全恢复你原始 YML 的目录结构和 Qt 配置
   # ============================================================
 
   Build_ARM64_Qt6:
@@ -302,7 +290,7 @@ jobs:
     steps:
 
       # ----------------------------------------------------------
-      # Checkout Sandboxie
+      # Checkout Sandboxie 到工作区根目录
       # ----------------------------------------------------------
 
       - name: Checkout code
@@ -310,7 +298,6 @@ jobs:
         with:
           repository: sandboxie-plus/Sandboxie
           ref: ${{ inputs.release_version_tag }}
-          path: Sandboxie
 
       # ----------------------------------------------------------
       # 获取 verify.c
@@ -323,20 +310,19 @@ jobs:
           path: .
 
       # ----------------------------------------------------------
-      # 替换 Sandboxie 内的 verify.c
+      # 替换 Sandboxie 的 verify.c
       # ----------------------------------------------------------
 
       - name: Replace verify.c
-        working-directory: Sandboxie
         shell: powershell
         run: |
-          if (!(Test-Path "..\verify.c")) {
+          if (!(Test-Path ".\verify.c")) {
               throw "verify.c not found."
           }
 
           Copy-Item `
-            -Path "..\verify.c" `
-            -Destination "Sandboxie\core\drv\verify.c" `
+            -Path ".\verify.c" `
+            -Destination ".\Sandboxie\core\drv\verify.c" `
             -Force
 
       # ----------------------------------------------------------
@@ -347,37 +333,31 @@ jobs:
         shell: cmd
         run: |
           @echo on
-          call "${{ github.workspace }}\Sandboxie\Installer\buildVariables.cmd" build_qt6
+          call "${{ github.workspace }}\Installer\buildVariables.cmd" build_qt6
           echo qt6_version=%qt6_version% >> %GITHUB_ENV%
 
       - name: Setup msbuild
         uses: microsoft/setup-msbuild@v3
 
-      # ==========================================================
+      #
       # Compile Sandboxie Core
-      # ==========================================================
+      #
 
       - name: Build Sandboxie x86 (DLLs & svc)
-        working-directory: Sandboxie
         run: msbuild /t:build Sandboxie\SandboxDll.sln /p:Configuration="SbieRelease" /p:Platform=Win32 -maxcpucount:8
 
       - name: Build Sandboxie ARM64 (all)
-        working-directory: Sandboxie
         run: msbuild /t:build Sandboxie\Sandbox.sln /p:Configuration="SbieRelease" /p:Platform=ARM64 -maxcpucount:8
 
       - name: Build Sandboxie ARM64EC (DLL)
-        working-directory: Sandboxie
         run: msbuild /t:build Sandboxie\SandboxDll.sln /p:Configuration="SbieRelease" /p:Platform=ARM64EC -maxcpucount:8
 
       - name: Build Sandboxie ARM64 (drv)
-        working-directory: Sandboxie
         run: msbuild /t:build Sandboxie\SandboxDrv.sln /p:Configuration="SbieRelease" /p:Platform=ARM64 -maxcpucount:8
 
-      # ==========================================================
+      #
       # Prepare Qt Framework for ARM64
       #
-      # 保持你最初能工作的配置，不修改 arch
-      # ==========================================================
 
       - name: Install Qt6 x64
         uses: jurplel/install-qt-action@v4.3.1
@@ -395,15 +375,13 @@ jobs:
           tools: 'tools_opensslv3_x64'
           cache: true
 
-      # ==========================================================
-      # Jom
-      # ==========================================================
+      # Jom cache restore (and post-job save on miss)
 
       - name: Cache jom archive
         id: cache-jom
         uses: actions/cache@v6.1.0
         with:
-          path: Sandboxie/jom_1_1_4.zip
+          path: jom_1_1_4.zip
           key: jom-1.1.4-${{ runner.os }}
           restore-keys: |
             jom-1.1.4-
@@ -412,58 +390,50 @@ jobs:
 
       - name: Installing Jom
         shell: cmd
-        working-directory: Sandboxie
         run: SandboxiePlus\install_jom.cmd
 
-      # ==========================================================
+      #
       # Compile Sandboxie Plus
-      # ==========================================================
+      #
 
       - name: Build Sandboxie-Plus ARM64
-        working-directory: Sandboxie
         run: SandboxiePlus\qmake_plus.cmd ARM64 build_qt6
 
       - name: Build SbieShell ARM64
-        working-directory: Sandboxie
         run: msbuild /t:restore,build -p:RestorePackagesConfig=true SandboxiePlus\SbieShell\SbieShell.sln /p:Configuration="Release" /p:Platform=ARM64
 
-      # ==========================================================
+      #
       # Compile Sandboxie Tools
-      # ==========================================================
+      #
 
       - name: Build Sandboxie-Tools ARM64
-        working-directory: Sandboxie
         run: msbuild /t:build SandboxieTools\SandboxieTools.sln /p:Configuration="Release" /p:Platform=ARM64 -maxcpucount:8
 
-      # ==========================================================
+      #
       # Merge everything together
-      # ==========================================================
+      #
 
       - name: Add missing languages for Qt6
-        working-directory: Sandboxie
         run: Installer\fix_qt5_languages.cmd x64 build_qt6
 
       - name: Get openssl binaries
-        working-directory: Sandboxie
         run: Installer\get_openssl.cmd
 
       - name: Get 7z binaries
-        working-directory: Sandboxie
         run: Installer\get_7zip.cmd
 
       - name: Merging Build
-        working-directory: Sandboxie
         run: Installer\copy_build.cmd ARM64 build_qt6
 
-      # ==========================================================
+      # ----------------------------------------------------------
       # Upload ARM64
-      # ==========================================================
+      # ----------------------------------------------------------
 
       - name: Upload Sandboxie ARM64
         uses: actions/upload-artifact@v7.0.1
         with:
           name: Sandboxie_ARM64
-          path: Sandboxie/Installer/SbiePlus_a64/SbieDrv.sys
+          path: Installer/SbiePlus_a64/SbieDrv.sys
           retention-days: 60
           if-no-files-found: error
 
@@ -489,17 +459,6 @@ jobs:
     steps:
 
       # ----------------------------------------------------------
-      # Checkout 当前项目
-      #
-      # 使用 Update_verify 最终的 commit
-      # ----------------------------------------------------------
-
-      - name: Checkout current project
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ needs.Update_verify.outputs.commit_sha }}
-
-      # ----------------------------------------------------------
       # 下载 x64
       # ----------------------------------------------------------
 
@@ -520,10 +479,10 @@ jobs:
           path: release/ARM64
 
       # ----------------------------------------------------------
-      # 检查文件
+      # 检查并重命名
       # ----------------------------------------------------------
 
-      - name: Check release files
+      - name: Prepare release files
         shell: bash
         run: |
           set -e
@@ -531,29 +490,12 @@ jobs:
           test -f release/x64/SbieDrv.sys
           test -f release/ARM64/SbieDrv.sys
 
-          echo "x64:"
-          ls -lh release/x64/SbieDrv.sys
+          mv release/x64/SbieDrv.sys \
+             release/SbieDrv_x64.sys
 
-          echo
-          echo "ARM64:"
-          ls -lh release/ARM64/SbieDrv.sys
+          mv release/ARM64/SbieDrv.sys \
+             release/SbieDrv_ARM64.sys
 
-      # ----------------------------------------------------------
-      # 重命名两个文件
-      # ----------------------------------------------------------
-
-      - name: Prepare release files
-        shell: bash
-        run: |
-          mv \
-            release/x64/SbieDrv.sys \
-            release/SbieDrv_x64.sys
-
-          mv \
-            release/ARM64/SbieDrv.sys \
-            release/SbieDrv_ARM64.sys
-
-          echo
           echo "Release files:"
           ls -lh release/
 
