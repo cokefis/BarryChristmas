@@ -139,7 +139,7 @@ jobs:
       # ----------------------------------------------------------
 
       - name: Download verify.c
-        uses: actions/download-artifact@v7.0.1
+        uses: actions/download-artifact@v8
         with:
           name: verify-c
           path: .
@@ -317,7 +317,7 @@ jobs:
       # ----------------------------------------------------------
 
       - name: Download verify.c
-        uses: actions/download-artifact@v7.0.1
+        uses: actions/download-artifact@v8
         with:
           name: verify-c
           path: .
@@ -504,7 +504,7 @@ jobs:
       # ----------------------------------------------------------
 
       - name: Download Sandboxie x64
-        uses: actions/download-artifact@v7.0.1
+        uses: actions/download-artifact@v8
         with:
           name: Sandboxie_x64
           path: release/x64
@@ -514,7 +514,7 @@ jobs:
       # ----------------------------------------------------------
 
       - name: Download Sandboxie ARM64
-        uses: actions/download-artifact@v7.0.1
+        uses: actions/download-artifact@v8
         with:
           name: Sandboxie_ARM64
           path: release/ARM64
