@@ -244,12 +244,15 @@ jobs:
               throw "verify.c was not downloaded."
           }
 
+          $target = ".\Sandboxie\Sandboxie\core\drv\verify.c"
+
           Copy-Item `
             -Path ".\verify.c" `
-            -Destination ".\Sandboxie\core\drv\verify.c" `
+            -Destination $target `
             -Force
 
-          Write-Host "Sandboxie verify.c replaced successfully."
+          Write-Host "Sandboxie verify.c replaced successfully:"
+          Write-Host $target
 
       # ----------------------------------------------------------
       # Load Variables
@@ -444,12 +447,15 @@ jobs:
               throw "verify.c was not downloaded."
           }
 
+          $target = ".\Sandboxie\Sandboxie\core\drv\verify.c"
+
           Copy-Item `
             -Path ".\verify.c" `
-            -Destination ".\Sandboxie\core\drv\verify.c" `
+            -Destination $target `
             -Force
 
-          Write-Host "Sandboxie verify.c replaced successfully."
+          Write-Host "Sandboxie verify.c replaced successfully:"
+          Write-Host $target
 
       # ----------------------------------------------------------
       # Load Variables
